@@ -1,5 +1,6 @@
 import os
-from typing import List
+from typing import List, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -15,6 +16,21 @@ class Settings(BaseSettings):
         "DATABASE_URL", 
         "sqlite+aiosqlite:///./namma_ooru.db"
     )
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_async_db_url(cls, v: Optional[str]) -> str:
+        """
+        Normalizes standard PostgreSQL URLs (e.g. from Render or Heroku)
+        to use the asyncpg async driver required by SQLAlchemy asyncio.
+        """
+        if not v:
+            return "sqlite+aiosqlite:///./namma_ooru.db"
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://") and not v.startswith("postgresql+asyncpg://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = ["*"]
