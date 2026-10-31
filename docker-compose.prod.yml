@@ -1,0 +1,88 @@
+version: '3.8'
+
+# ==============================================================================
+# Namma Ooru AI — Production Multi-Container Orchestration
+# Custom Domain Publishing with SSL (Certbot) + Nginx + Flutter Web + FastAPI + PostGIS
+# ==============================================================================
+
+services:
+  # 1. PostgreSQL 16 + PostGIS Spatial Database
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: namma_ooru_postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-namma_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-namma_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-namma_ooru_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-namma_user} -d ${POSTGRES_DB:-namma_ooru_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - namma_network
+
+  # 2. FastAPI ASGI Backend (Uvicorn)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: namma_ooru_api
+    restart: unless-stopped
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-namma-ooru-super-secret-production-key-change-in-prod-2026}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-namma_user}:${POSTGRES_PASSWORD:-namma_secure_password}@db:5432/${POSTGRES_DB:-namma_ooru_db}
+      - UPLOAD_DIR=/app/uploads
+      - ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=1440
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    networks:
+      - namma_network
+
+  # 3. Nginx Web Server & Reverse Proxy
+  web:
+    image: nginx:alpine
+    container_name: namma_ooru_web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./build/web:/usr/share/nginx/html:ro
+      - uploads_data:/app/uploads:ro
+      - certbot_etc:/etc/letsencrypt:ro
+      - certbot_var:/var/www/certbot:ro
+    depends_on:
+      - backend
+    networks:
+      - namma_network
+
+  # 4. Certbot Automated SSL Certificate Manager
+  certbot:
+    image: certbot/certbot:latest
+    container_name: namma_ooru_certbot
+    volumes:
+      - certbot_etc:/etc/letsencrypt
+      - certbot_var:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    networks:
+      - namma_network
+
+volumes:
+  postgres_data:
+  uploads_data:
+  certbot_etc:
+  certbot_var:
+
+networks:
+  namma_network:
+    driver: bridge
