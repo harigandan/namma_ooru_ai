@@ -1,20 +1,26 @@
-import 'package:flutter/foundation.dart';
-
 /// API endpoint paths matching backend specification
 class ApiEndpoints {
   ApiEndpoints._();
 
-  /// Dynamic API Base URL supporting custom domain deployments:
-  /// 1. `--dart-define=API_BASE_URL=https://yourdomain.com/api/v1`
-  /// 2. In release web mode: `/api/v1` (relative proxy through Nginx)
-  /// 3. Development fallback: `http://localhost:8000/api/v1`
+  /// Production API host deployed on Render
+  static const String defaultProductionHost = 'https://namma-ooru-ai-2.onrender.com';
+  static const String apiVersion = '/api/v1';
+
+  /// Dynamic API Base URL:
+  /// 1. `--dart-define=API_BASE_URL=https://...` (override if custom domain or local staging)
+  /// 2. If kIsWeb and hosted together with Nginx: relative `/api/v1`
+  /// 3. Default: `https://namma-ooru-ai-2.onrender.com/api/v1`
   static String get baseUrl {
     const fromEnv = String.fromEnvironment('API_BASE_URL');
-    if (fromEnv.isNotEmpty) return fromEnv;
-    if (kIsWeb && kReleaseMode) {
-      return '/api/v1';
+    if (fromEnv.isNotEmpty) {
+      final sanitized = fromEnv.endsWith('/')
+          ? fromEnv.substring(0, fromEnv.length - 1)
+          : fromEnv;
+      return sanitized.endsWith(apiVersion)
+          ? sanitized
+          : '$sanitized$apiVersion';
     }
-    return 'http://localhost:8000/api/v1';
+    return '$defaultProductionHost$apiVersion';
   }
 
   // Auth

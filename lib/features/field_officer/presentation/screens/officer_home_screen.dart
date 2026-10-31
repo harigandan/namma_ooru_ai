@@ -24,6 +24,7 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
   int _selectedFilterTab = 0; // 0: Active, 1: Completed
   List<ComplaintModel> _assignedTasks = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -32,17 +33,25 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
   }
 
   Future<void> _loadOfficerTasks() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     try {
-      final tasks = await ApiService().getComplaints();
+      final tasks = await ApiService().getOfficerAssignments();
       if (mounted) {
         setState(() {
           _assignedTasks = tasks;
           _isLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceFirst('Exception: ', '');
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -50,6 +59,7 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
     final notesController = TextEditingController();
     bool hasBeforePhoto = false;
     bool hasAfterPhoto = false;
+    bool isSubmitting = false;
 
     showModalBottomSheet(
       context: context,
@@ -144,46 +154,39 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
                         child: AppButton(
                           label: 'Update In-Progress',
                           variant: AppButtonVariant.secondary,
-                          onPressed: () async {
-                            await ApiService().updateComplaintStatus(
-                              complaintId: complaint.id,
-                              newStatus: 'in_progress',
-                              resolutionNotes: notesController.text,
-                            );
-                            setState(() {
-                              final idx = _assignedTasks
-                                  .indexWhere((c) => c.id == complaint.id);
-                              if (idx != -1) {
-                                _assignedTasks[idx] = ComplaintModel(
-                                  id: complaint.id,
-                                  complaintNumber: complaint.complaintNumber,
-                                  title: complaint.title,
-                                  description: complaint.description,
-                                  descriptionTa: complaint.descriptionTa,
-                                  category: complaint.category,
-                                  categoryLabel: complaint.categoryLabel,
-                                  categoryLabelTa: complaint.categoryLabelTa,
-                                  priority: complaint.priority,
-                                  status: ComplaintStatus.inProgress,
-                                  departmentId: complaint.departmentId,
-                                  departmentName: complaint.departmentName,
-                                  departmentNameTa: complaint.departmentNameTa,
-                                  citizenName: complaint.citizenName,
-                                  citizenPhone: complaint.citizenPhone,
-                                  address: complaint.address,
-                                  wardNumber: complaint.wardNumber,
-                                  zone: complaint.zone,
-                                  latitude: complaint.latitude,
-                                  longitude: complaint.longitude,
-                                  createdAt: complaint.createdAt,
-                                  aiConfidence: complaint.aiConfidence,
-                                  aiSummary: complaint.aiSummary,
-                                );
-                              }
-                            });
-                            if (!context.mounted) return;
-                            Navigator.of(context).pop();
-                          },
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  setSheetState(() => isSubmitting = true);
+                                  try {
+                                    await ApiService().updateOfficerProgress(
+                                      complaintId: complaint.id,
+                                      status: 'in_progress',
+                                      resolutionNotes: notesController.text.trim().isNotEmpty
+                                          ? notesController.text.trim()
+                                          : 'Field crew inspecting and initiating repair work.',
+                                    );
+                                    await _loadOfficerTasks();
+                                    if (!context.mounted) return;
+                                    Navigator.of(context).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            '${complaint.complaintNumber} updated to In-Progress'),
+                                        backgroundColor: AppColors.success,
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    setSheetState(() => isSubmitting = false);
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Update failed: $e'),
+                                        backgroundColor: AppColors.error,
+                                      ),
+                                    );
+                                  }
+                                },
                         ),
                       ),
                       const SizedBox(width: AppSpacing.sm),
@@ -192,57 +195,38 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
                           label: 'Mark Resolved',
                           variant: AppButtonVariant.primary,
                           leadingIcon: Icons.check,
-                          onPressed: () async {
-                            await ApiService().updateComplaintStatus(
-                              complaintId: complaint.id,
-                              newStatus: 'resolved',
-                              resolutionNotes: notesController.text.isNotEmpty
-                                  ? notesController.text
-                                  : 'Work completed by field crew.',
-                            );
-                            setState(() {
-                              final idx = _assignedTasks
-                                  .indexWhere((c) => c.id == complaint.id);
-                              if (idx != -1) {
-                                _assignedTasks[idx] = ComplaintModel(
-                                  id: complaint.id,
-                                  complaintNumber: complaint.complaintNumber,
-                                  title: complaint.title,
-                                  description: complaint.description,
-                                  descriptionTa: complaint.descriptionTa,
-                                  category: complaint.category,
-                                  categoryLabel: complaint.categoryLabel,
-                                  categoryLabelTa: complaint.categoryLabelTa,
-                                  priority: complaint.priority,
-                                  status: ComplaintStatus.resolved,
-                                  departmentId: complaint.departmentId,
-                                  departmentName: complaint.departmentName,
-                                  departmentNameTa: complaint.departmentNameTa,
-                                  citizenName: complaint.citizenName,
-                                  citizenPhone: complaint.citizenPhone,
-                                  address: complaint.address,
-                                  wardNumber: complaint.wardNumber,
-                                  zone: complaint.zone,
-                                  latitude: complaint.latitude,
-                                  longitude: complaint.longitude,
-                                  createdAt: complaint.createdAt,
-                                  aiConfidence: complaint.aiConfidence,
-                                  aiSummary: complaint.aiSummary,
-                                  resolutionNotes:
-                                      notesController.text.isNotEmpty
-                                          ? notesController.text
-                                          : "Work completed by field crew.",
-                                );
-                              }
-                            });
-                            if (!context.mounted) return;
-                            Navigator.of(context).pop();
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                  content: Text(
-                                      '${complaint.complaintNumber} marked resolved with before/after photos.')),
-                            );
-                          },
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  setSheetState(() => isSubmitting = true);
+                                  try {
+                                    await ApiService().completeOfficerAssignment(
+                                      complaintId: complaint.id,
+                                      resolutionNotes: notesController.text.trim().isNotEmpty
+                                          ? notesController.text.trim()
+                                          : 'Work completed and verified by field crew.',
+                                    );
+                                    await _loadOfficerTasks();
+                                    if (!context.mounted) return;
+                                    Navigator.of(context).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                            '${complaint.complaintNumber} marked resolved successfully.'),
+                                        backgroundColor: AppColors.success,
+                                      ),
+                                    );
+                                  } catch (e) {
+                                    setSheetState(() => isSubmitting = false);
+                                    if (!context.mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Resolution update failed: $e'),
+                                        backgroundColor: AppColors.error,
+                                      ),
+                                    );
+                                  }
+                                },
                         ),
                       ),
                     ],
@@ -507,7 +491,60 @@ class _OfficerHomeScreenState extends State<OfficerHomeScreen> {
                 ? ProfileScreen(onLogout: widget.onLogout)
                 : _isLoading
                     ? const Center(child: CircularProgressIndicator())
-                    : ListView.builder(
+                    : _errorMessage != null
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(AppSpacing.xxl),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.cloud_off_outlined,
+                                      size: 48, color: AppColors.error),
+                                  const SizedBox(height: AppSpacing.md),
+                                  Text(
+                                    'Could not load assignments: $_errorMessage',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        fontSize: 14,
+                                        color: AppColors.textPrimary),
+                                  ),
+                                  const SizedBox(height: AppSpacing.md),
+                                  ElevatedButton.icon(
+                                    onPressed: _loadOfficerTasks,
+                                    icon: const Icon(Icons.refresh),
+                                    label:
+                                        const Text('Retry / மீண்டும் முயற்சி'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        : currentList.isEmpty
+                            ? Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(AppSpacing.xxl),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.task_alt,
+                                          size: 48,
+                                          color: AppColors.textSecondary),
+                                      const SizedBox(height: AppSpacing.sm),
+                                      Text(
+                                        _selectedFilterTab == 0
+                                            ? 'No active tasks assigned to your zone / பணிகள் எதுவும் இல்லை'
+                                            : 'No resolved tasks for today / முடிவுற்ற பணிகள் இல்லை',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.textSecondary),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : ListView.builder(
                     padding: const EdgeInsets.all(AppSpacing.md),
                     itemCount: currentList.length,
                     itemBuilder: (context, index) {

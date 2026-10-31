@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/app_spacing.dart';
+import '../../../../core/services/api_service.dart';
 import '../../../../shared/widgets/app_button.dart';
 import '../../../../shared/widgets/status_badge.dart';
 import '../../../../shared/widgets/priority_indicator.dart';
@@ -19,6 +20,38 @@ class _ComplaintDetailScreenState extends State<ComplaintDetailScreen> {
   int _userRating = 5;
   final TextEditingController _feedbackController = TextEditingController();
   bool _feedbackSubmitted = false;
+  bool _isSubmittingFeedback = false;
+  List<ComplaintTimelineEvent> _liveTimeline = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchLiveTimeline();
+  }
+
+  Future<void> _fetchLiveTimeline() async {
+    try {
+      final history = await ApiService().getComplaintHistory(widget.complaint.id);
+      if (history.isNotEmpty && mounted) {
+        setState(() {
+          _liveTimeline = history.map((item) {
+            final fromStatus = item['from_status'] ?? 'submitted';
+            final toStatus = item['to_status'] ?? '';
+            final notes = item['notes'] ?? 'Status updated in governance portal';
+            final time = DateTime.tryParse(item['created_at'] ?? '') ?? DateTime.now();
+            return ComplaintTimelineEvent(
+              title: toStatus.isNotEmpty ? 'Status: $toStatus' : 'Update',
+              description: '$notes (Previous: $fromStatus)',
+              timestamp: time,
+              actorName: 'Municipal Authority / Field Officer',
+              actorRole: 'Authority',
+              icon: toStatus == 'resolved' ? Icons.check_circle : Icons.update,
+            );
+          }).toList();
+        });
+      }
+    } catch (_) {}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -283,7 +316,8 @@ class _ComplaintDetailScreenState extends State<ComplaintDetailScreen> {
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: AppSpacing.sm),
-            ...c.timeline.map((event) => _buildTimelineTile(event)),
+            ...(_liveTimeline.isNotEmpty ? _liveTimeline : c.timeline)
+                .map((event) => _buildTimelineTile(event)),
 
             const SizedBox(height: AppSpacing.md),
 
@@ -347,10 +381,34 @@ class _ComplaintDetailScreenState extends State<ComplaintDetailScreen> {
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       AppButton(
-                        label: 'Submit Feedback / சமர்ப்பி',
+                        label: _isSubmittingFeedback
+                            ? 'Submitting...'
+                            : 'Submit Feedback / சமர்ப்பி',
                         height: 38,
-                        onPressed: () =>
-                            setState(() => _feedbackSubmitted = true),
+                        onPressed: _isSubmittingFeedback
+                            ? null
+                            : () async {
+                                final messenger = ScaffoldMessenger.of(context);
+                                setState(() => _isSubmittingFeedback = true);
+                                final success = await ApiService().submitFeedback(
+                                  complaintId: c.id,
+                                  rating: _userRating,
+                                  feedbackText: _feedbackController.text.trim(),
+                                );
+                                if (mounted) {
+                                  setState(() {
+                                    _isSubmittingFeedback = false;
+                                    _feedbackSubmitted = true;
+                                  });
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                      content: Text(success
+                                          ? 'Feedback saved to municipal registry!'
+                                          : 'Feedback recorded locally.'),
+                                    ),
+                                  );
+                                }
+                              },
                       ),
                     ],
                   ],

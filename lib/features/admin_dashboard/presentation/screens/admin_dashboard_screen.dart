@@ -28,7 +28,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   String _searchQuery = '';
   List<ComplaintModel> _complaints = [];
   Map<String, dynamic> _metrics = {};
+  List<Map<String, dynamic>> _departments = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -37,19 +39,33 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Future<void> _loadAdminData() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
     try {
       final fetchedComplaints = await ApiService().getComplaints();
       final fetchedMetrics = await ApiService().getAdminMetrics();
+      List<Map<String, dynamic>> fetchedDepts = [];
+      try {
+        fetchedDepts = await ApiService().getDepartments();
+      } catch (_) {}
+
       if (mounted) {
         setState(() {
           _complaints = fetchedComplaints;
           _metrics = fetchedMetrics;
+          _departments = fetchedDepts;
           _isLoading = false;
         });
       }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceFirst('Exception: ', '');
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -146,9 +162,13 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   void _handleAssignDialog(ComplaintModel complaint) {
-    String selectedDept = complaint.departmentName;
+    String selectedDeptId = complaint.departmentId.isNotEmpty
+        ? complaint.departmentId
+        : (_departments.isNotEmpty ? _departments.first['id'].toString() : '');
+    String selectedDeptName = complaint.departmentName;
     String selectedOfficer =
         complaint.assignedOfficerName ?? "Er. K. Sivakumar (AE-Water)";
+    bool isAssigning = false;
 
     showDialog(
       context: context,
@@ -167,29 +187,54 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       style:
                           TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedDept,
-                    items: const [
-                      DropdownMenuItem(
-                          value: "Metro Water & Supply Board",
-                          child: Text("Metro Water & Supply Board")),
-                      DropdownMenuItem(
-                          value: "Solid Waste Management",
-                          child: Text("Solid Waste Management")),
-                      DropdownMenuItem(
-                          value: "Highways & Roads Engineering",
-                          child: Text("Highways & Roads Engineering")),
-                      DropdownMenuItem(
-                          value: "Public Lighting & Electrical",
-                          child: Text("Public Lighting & Electrical")),
-                      DropdownMenuItem(
-                          value: "Stormwater & Drainage",
-                          child: Text("Stormwater & Drainage")),
-                    ],
-                    onChanged: (val) {
-                      if (val != null) setDialogState(() => selectedDept = val);
-                    },
-                  ),
+                  if (_departments.isNotEmpty)
+                    DropdownButtonFormField<String>(
+                      initialValue: _departments.any((d) => d['id'].toString() == selectedDeptId)
+                          ? selectedDeptId
+                          : _departments.first['id'].toString(),
+                      items: _departments.map((d) {
+                        return DropdownMenuItem<String>(
+                          value: d['id'].toString(),
+                          child: Text(d['name'].toString()),
+                        );
+                      }).toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            selectedDeptId = val;
+                            final match = _departments.firstWhere(
+                              (d) => d['id'].toString() == val,
+                              orElse: () => {'name': selectedDeptName},
+                            );
+                            selectedDeptName = match['name']?.toString() ?? selectedDeptName;
+                          });
+                        }
+                      },
+                    )
+                  else
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedDeptName,
+                      items: const [
+                        DropdownMenuItem(
+                            value: "Metro Water & Supply Board",
+                            child: Text("Metro Water & Supply Board")),
+                        DropdownMenuItem(
+                            value: "Solid Waste Management",
+                            child: Text("Solid Waste Management")),
+                        DropdownMenuItem(
+                            value: "Highways & Roads Engineering",
+                            child: Text("Highways & Roads Engineering")),
+                        DropdownMenuItem(
+                            value: "Public Lighting & Electrical",
+                            child: Text("Public Lighting & Electrical")),
+                        DropdownMenuItem(
+                            value: "Stormwater & Drainage",
+                            child: Text("Stormwater & Drainage")),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) setDialogState(() => selectedDeptName = val);
+                      },
+                    ),
                   const SizedBox(height: AppSpacing.md),
                   const Text('Assign Field Officer:',
                       style:
@@ -227,55 +272,72 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () async {
-                    final nav = Navigator.of(context);
-                    final messenger = ScaffoldMessenger.of(context);
-                    await ApiService().assignComplaint(
-                      complaintId: complaint.id,
-                      departmentId: complaint.departmentId,
-                      officerId: selectedOfficer,
-                    );
-                    setState(() {
-                      final idx = _complaints
-                          .indexWhere((item) => item.id == complaint.id);
-                      if (idx != -1) {
-                        _complaints[idx] = ComplaintModel(
-                          id: complaint.id,
-                          complaintNumber: complaint.complaintNumber,
-                          title: complaint.title,
-                          description: complaint.description,
-                          descriptionTa: complaint.descriptionTa,
-                          category: complaint.category,
-                          categoryLabel: complaint.categoryLabel,
-                          categoryLabelTa: complaint.categoryLabelTa,
-                          priority: complaint.priority,
-                          status: ComplaintStatus.assigned,
-                          departmentId: complaint.departmentId,
-                          departmentName: selectedDept,
-                          departmentNameTa: complaint.departmentNameTa,
-                          assignedOfficerName: selectedOfficer,
-                          citizenName: complaint.citizenName,
-                          citizenPhone: complaint.citizenPhone,
-                          address: complaint.address,
-                          wardNumber: complaint.wardNumber,
-                          zone: complaint.zone,
-                          latitude: complaint.latitude,
-                          longitude: complaint.longitude,
-                          createdAt: complaint.createdAt,
-                          aiConfidence: complaint.aiConfidence,
-                          aiSummary: complaint.aiSummary,
-                        );
-                      }
-                    });
-                    if (!mounted) return;
-                    nav.pop();
-                    messenger.showSnackBar(
-                      SnackBar(
-                          content: Text(
-                              '${complaint.complaintNumber} assigned to $selectedOfficer')),
-                    );
-                  },
-                  child: const Text('Confirm Assignment'),
+                  onPressed: isAssigning
+                      ? null
+                      : () async {
+                          setDialogState(() => isAssigning = true);
+                          final nav = Navigator.of(context);
+                          final messenger = ScaffoldMessenger.of(context);
+                          try {
+                            await ApiService().assignComplaint(
+                              complaintId: complaint.id,
+                              departmentId: selectedDeptId.isNotEmpty
+                                  ? selectedDeptId
+                                  : complaint.departmentId,
+                            );
+                            setState(() {
+                              final idx = _complaints
+                                  .indexWhere((item) => item.id == complaint.id);
+                              if (idx != -1) {
+                                _complaints[idx] = ComplaintModel(
+                                  id: complaint.id,
+                                  complaintNumber: complaint.complaintNumber,
+                                  title: complaint.title,
+                                  description: complaint.description,
+                                  descriptionTa: complaint.descriptionTa,
+                                  category: complaint.category,
+                                  categoryLabel: complaint.categoryLabel,
+                                  categoryLabelTa: complaint.categoryLabelTa,
+                                  priority: complaint.priority,
+                                  status: ComplaintStatus.assigned,
+                                  departmentId: selectedDeptId.isNotEmpty
+                                      ? selectedDeptId
+                                      : complaint.departmentId,
+                                  departmentName: selectedDeptName,
+                                  departmentNameTa: complaint.departmentNameTa,
+                                  assignedOfficerName: selectedOfficer,
+                                  citizenName: complaint.citizenName,
+                                  citizenPhone: complaint.citizenPhone,
+                                  address: complaint.address,
+                                  wardNumber: complaint.wardNumber,
+                                  zone: complaint.zone,
+                                  latitude: complaint.latitude,
+                                  longitude: complaint.longitude,
+                                  createdAt: complaint.createdAt,
+                                  aiConfidence: complaint.aiConfidence,
+                                  aiSummary: complaint.aiSummary,
+                                );
+                              }
+                            });
+                            nav.pop();
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                    '${complaint.complaintNumber} assigned to $selectedDeptName'),
+                                backgroundColor: AppColors.success,
+                              ),
+                            );
+                          } catch (e) {
+                            setDialogState(() => isAssigning = false);
+                            messenger.showSnackBar(
+                              SnackBar(
+                                content: Text('Assignment failed: $e'),
+                                backgroundColor: AppColors.error,
+                              ),
+                            );
+                          }
+                        },
+                  child: Text(isAssigning ? 'Assigning...' : 'Confirm Assignment'),
                 ),
               ],
             );
@@ -454,6 +516,31 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Widget _buildWorkspaceContent(bool isDesktop) {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
+    }
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xxl),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 48, color: AppColors.error),
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                'Could not load administrative data: $_errorMessage',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              ElevatedButton.icon(
+                onPressed: _loadAdminData,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry / மீண்டும் முயற்சி'),
+              ),
+            ],
+          ),
+        ),
+      );
     }
     switch (_selectedSidebarIndex) {
       case 5: // Live Map
@@ -646,8 +733,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     ],
                   ),
                 ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
+                if (_filteredComplaints.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(AppSpacing.xxl),
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.inbox_outlined, size: 48, color: AppColors.textMuted),
+                          SizedBox(height: AppSpacing.sm),
+                          Text(
+                            'No complaints found matching criteria / கோரிக்கைகள் எதுவும் இல்லை',
+                            style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
                   child: DataTable(
                     headingRowColor:
                         WidgetStateProperty.all(AppColors.surfaceSubtle),

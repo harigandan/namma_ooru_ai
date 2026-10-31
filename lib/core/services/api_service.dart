@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../network/dio_client.dart';
 import '../constants/api_endpoints.dart';
 import '../../features/complaints/domain/models/complaint_model.dart';
-import '../../features/complaints/data/sample_complaints_data.dart';
 
 class ApiService {
   static final ApiService _instance = ApiService._internal();
@@ -19,6 +18,56 @@ class ApiService {
   bool get isBackendConnected => _isBackendConnected;
   String? get currentUserRole => _currentUserRole;
   Map<String, dynamic>? get currentUserProfile => _currentUserProfile;
+
+  /// Centralized error message extractor for consistent user notifications
+  String _parseDioError(DioException dioError, {String fallback = 'Operation failed'}) {
+    if (dioError.response != null) {
+      final statusCode = dioError.response?.statusCode;
+      final data = dioError.response?.data;
+
+      if (data is Map && data['detail'] != null) {
+        final detail = data['detail'];
+        if (detail is String) return detail;
+        if (detail is List && detail.isNotEmpty) {
+          final first = detail.first;
+          if (first is Map && first['msg'] != null) {
+            return '${first['loc']?.last ?? ''}: ${first['msg']}';
+          }
+          return detail.toString();
+        }
+      }
+
+      switch (statusCode) {
+        case 401:
+          return 'Authentication failed or session expired (401).';
+        case 403:
+          return 'Access forbidden. You do not have permissions for this action (403).';
+        case 404:
+          return 'The requested record or resource was not found (404).';
+        case 422:
+          return 'Validation error. Please verify input fields (422).';
+        case 500:
+          return 'Internal server error (500). Please try again shortly.';
+        case 502:
+        case 503:
+          return 'Render backend is starting up. Please wait a moment and retry.';
+        default:
+          return '$fallback (Status $statusCode)';
+      }
+    }
+
+    if (dioError.type == DioExceptionType.connectionTimeout ||
+        dioError.type == DioExceptionType.receiveTimeout ||
+        dioError.type == DioExceptionType.sendTimeout) {
+      return 'Connection timed out. Render backend may be waking up from sleep. Retrying...';
+    }
+
+    if (dioError.type == DioExceptionType.connectionError) {
+      return 'Cannot reach backend at ${ApiEndpoints.baseUrl}. Please check internet connection.';
+    }
+
+    return dioError.message ?? fallback;
+  }
 
   /// Check backend connectivity
   Future<bool> checkHealth() async {
@@ -74,26 +123,16 @@ class ApiService {
         await prefs.setString('auth_access_token', accessToken);
         await prefs.setString('auth_refresh_token', refreshToken);
         await prefs.setString('user_role', role);
-        await prefs.setString('user_full_name', data['full_name'] ?? '');
+        await prefs.setString('user_full_name', _currentUserProfile?['full_name'] ?? data['full_name'] ?? '');
         await prefs.setString('user_email', emailOrPhone.trim());
 
-        return data;
+        return _currentUserProfile ?? data;
       } else {
         throw Exception('Login failed: Unexpected server response');
       }
     } on DioException catch (dioError) {
       _isBackendConnected = false;
-      String errorMsg = 'Authentication failed. Please verify credentials.';
-      if (dioError.response?.data != null &&
-          dioError.response?.data is Map &&
-          dioError.response?.data['detail'] != null) {
-        errorMsg = dioError.response?.data['detail'].toString() ?? errorMsg;
-      } else if (dioError.type == DioExceptionType.connectionError ||
-          dioError.type == DioExceptionType.connectionTimeout) {
-        errorMsg =
-            'Cannot reach backend server. Please verify backend is running on port 8000.';
-      }
-      throw Exception(errorMsg);
+      throw Exception(_parseDioError(dioError, fallback: 'Authentication failed. Please verify credentials.'));
     } catch (e) {
       _isBackendConnected = false;
       rethrow;
@@ -158,13 +197,7 @@ class ApiService {
       }
     } on DioException catch (dioError) {
       _isBackendConnected = false;
-      String errorMsg = 'Registration failed';
-      if (dioError.response?.data != null &&
-          dioError.response?.data is Map &&
-          dioError.response?.data['detail'] != null) {
-        errorMsg = dioError.response?.data['detail'].toString() ?? errorMsg;
-      }
-      throw Exception(errorMsg);
+      throw Exception(_parseDioError(dioError, fallback: 'Registration failed. Please verify inputs.'));
     }
   }
 
@@ -223,6 +256,27 @@ class ApiService {
     }
   }
 
+  /// Explicit Token Refresh
+  Future<String?> refreshAccessToken() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final refreshToken = prefs.getString('auth_refresh_token');
+      if (refreshToken == null || refreshToken.isEmpty) return null;
+
+      final res = await _dio.post(
+        ApiEndpoints.refresh,
+        data: {'refresh_token': refreshToken},
+      );
+      if (res.statusCode == 200 && res.data != null) {
+        final newAccessToken = res.data['access_token'] as String;
+        DioClient().setAuthToken(newAccessToken);
+        await prefs.setString('auth_access_token', newAccessToken);
+        return newAccessToken;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Logout and clear all persisted credentials
   Future<void> logout() async {
     try {
@@ -238,7 +292,7 @@ class ApiService {
     _currentUserProfile = null;
   }
 
-  /// Fetch Map Complaints from backend
+  /// Fetch Map Complaints from live backend
   Future<List<Map<String, dynamic>>> getMapComplaints({
     String? category,
     String? status,
@@ -261,69 +315,27 @@ class ApiService {
         _isBackendConnected = true;
         return List<Map<String, dynamic>>.from(res.data as List);
       }
-    } catch (e) {
+      throw Exception('Failed to load map data: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load civic map issues'));
     }
-
-    // Default seeded fallback map points
-    return [
-      {
-        'id': 'c-map-1',
-        'complaint_number': 'NO-2026-MAP001',
-        'title': 'Major Drinking Water Pipeline Burst',
-        'category': 'water_supply',
-        'priority': 'critical',
-        'status': 'in_progress',
-        'latitude': 13.0850,
-        'longitude': 80.2101,
-        'address': '2nd Avenue, Anna Nagar, Chennai',
-      },
-      {
-        'id': 'c-map-2',
-        'complaint_number': 'NO-2026-MAP002',
-        'title': 'Overflowing Public Garbage Dump',
-        'category': 'solid_waste',
-        'priority': 'high',
-        'status': 'submitted',
-        'latitude': 13.0400,
-        'longitude': 80.2300,
-        'address': 'Usman Road Market, T. Nagar, Chennai',
-      },
-      {
-        'id': 'c-map-3',
-        'complaint_number': 'NO-2026-MAP003',
-        'title': 'Severe Deep Road Cave-in & Pothole',
-        'category': 'roads_footpaths',
-        'priority': 'critical',
-        'status': 'assigned',
-        'latitude': 13.0300,
-        'longitude': 80.2150,
-        'address': '100 Feet Road, Vadapalani, Chennai',
-      },
-      {
-        'id': 'c-map-4',
-        'complaint_number': 'NO-2026-MAP004',
-        'title': 'Multiple Streetlights Non-Functional',
-        'category': 'street_lighting',
-        'priority': 'medium',
-        'status': 'resolved',
-        'latitude': 13.0200,
-        'longitude': 80.2200,
-        'address': 'Gandhi Road, Velachery, Chennai',
-      },
-    ];
   }
 
-  /// Fetch Complaints list from backend
+  /// Fetch Complaints list from live backend (Zero mock fallback)
   Future<List<ComplaintModel>> getComplaints({
     String? status,
     String? category,
+    String? ward,
   }) async {
     try {
       final queryParams = <String, dynamic>{};
       if (status != null && status != 'all') queryParams['status'] = status;
       if (category != null && category != 'all') {
         queryParams['category'] = category;
+      }
+      if (ward != null && ward != 'all') {
+        queryParams['ward'] = ward;
       }
 
       final res = await _dio.get(
@@ -335,26 +347,20 @@ class ApiService {
         _isBackendConnected = true;
         final list = res.data as List;
         return list
-            .map(
-                (item) => ComplaintModel.fromJson(item as Map<String, dynamic>))
+            .map((item) => ComplaintModel.fromJson(item as Map<String, dynamic>))
             .toList();
       }
+      throw Exception('Failed to load complaints from backend: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Could not retrieve complaints list'));
     } catch (e) {
       _isBackendConnected = false;
+      rethrow;
     }
-
-    return mockComplaints.where((c) {
-      if (status != null && status != 'all' && c.statusString != status) {
-        return false;
-      }
-      if (category != null && category != 'all' && c.category != category) {
-        return false;
-      }
-      return true;
-    }).toList();
   }
 
-  /// Create a new complaint via API
+  /// Create a new complaint via live API
   Future<ComplaintModel> createComplaint({
     required String title,
     required String description,
@@ -396,38 +402,11 @@ class ApiService {
         _isBackendConnected = true;
         return ComplaintModel.fromJson(res.data as Map<String, dynamic>);
       }
-    } catch (e) {
+      throw Exception('Failed to lodge complaint: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Complaint submission failed'));
     }
-
-    final newComp = ComplaintModel(
-      id: 'comp-${DateTime.now().millisecondsSinceEpoch}',
-      complaintNumber:
-          'NOA-2026-${(DateTime.now().millisecondsSinceEpoch % 90000) + 10000}',
-      title: title,
-      description: description,
-      descriptionTa: descriptionTa,
-      category: category ?? 'other',
-      categoryLabel: (category ?? 'Other').replaceAll('_', ' ').toUpperCase(),
-      categoryLabelTa: category ?? 'இதர புகார்',
-      priority: ComplaintPriority.high,
-      status: ComplaintStatus.submitted,
-      departmentId: 'dept-auto',
-      departmentName: 'Municipal Department',
-      departmentNameTa: 'நகராட்சித் துறை',
-      citizenName: isAnonymous ? 'Anonymous Citizen' : 'Namma Ooru Citizen',
-      citizenPhone: '+91 98400 00002',
-      address: address,
-      wardNumber: wardNumber ?? 'Ward 102',
-      zone: zone ?? 'Zone 5',
-      latitude: latitude,
-      longitude: longitude,
-      createdAt: DateTime.now(),
-      aiConfidence: 0.95,
-      aiSummary: 'Classified by Namma Ooru AI.',
-    );
-    mockComplaints.insert(0, newComp);
-    return newComp;
   }
 
   /// AI NLP Classification API
@@ -441,21 +420,11 @@ class ApiService {
         _isBackendConnected = true;
         return res.data as Map<String, dynamic>;
       }
-    } catch (e) {
+      throw Exception('AI classification failed: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'AI analysis service temporarily unavailable'));
     }
-
-    return {
-      'detected_language':
-          text.contains(RegExp(r'[\u0B80-\u0BFF]')) ? 'ta' : 'en',
-      'predicted_category':
-          text.contains('குப்பை') ? 'garbage_collection' : 'water_supply',
-      'category_confidence': 0.94,
-      'predicted_priority': 'high',
-      'priority_confidence': 0.88,
-      'recommended_department_name': 'Municipal Administration',
-      'summary': 'Classified civic issue.',
-    };
   }
 
   /// Update complaint status / resolution notes
@@ -476,10 +445,11 @@ class ApiService {
         _isBackendConnected = true;
         return true;
       }
-    } catch (e) {
+      throw Exception('Failed to update complaint status: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Could not update status'));
     }
-    return true;
   }
 
   /// Admin assign complaint
@@ -493,20 +463,21 @@ class ApiService {
         ApiEndpoints.adminAssign(complaintId),
         queryParameters: {
           'department_id': departmentId,
-          if (officerId != null) 'officer_id': officerId,
+          if (officerId != null && officerId.isNotEmpty) 'officer_id': officerId,
         },
       );
       if (res.statusCode == 200) {
         _isBackendConnected = true;
         return true;
       }
-    } catch (e) {
+      throw Exception('Failed to assign complaint: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Failed to assign complaint'));
     }
-    return true;
   }
 
-  /// Admin Dashboard Metrics
+  /// Admin Dashboard Metrics from Live Backend
   Future<Map<String, dynamic>> getAdminMetrics() async {
     try {
       final res = await _dio.get(ApiEndpoints.adminDashboard);
@@ -514,22 +485,131 @@ class ApiService {
         _isBackendConnected = true;
         return res.data as Map<String, dynamic>;
       }
-    } catch (e) {
+      throw Exception('Failed to retrieve dashboard metrics: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
       _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load administrative metrics'));
     }
-    return {
-      'total_complaints': mockComplaints.length,
-      'pending_complaints': mockComplaints
-          .where((c) => c.status != ComplaintStatus.resolved)
-          .length,
-      'resolved_complaints': mockComplaints
-          .where((c) => c.status == ComplaintStatus.resolved)
-          .length,
-      'high_priority_complaints': mockComplaints
-          .where((c) => c.priority == ComplaintPriority.critical)
-          .length,
-      'average_resolution_hours': 18.4,
-    };
+  }
+
+  /// Admin Departments
+  Future<List<Map<String, dynamic>>> getDepartments() async {
+    try {
+      final res = await _dio.get(ApiEndpoints.adminDepartments);
+      if (res.statusCode == 200 && res.data is List) {
+        return List<Map<String, dynamic>>.from(res.data as List);
+      }
+      throw Exception('Failed to load departments');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load departments'));
+    }
+  }
+
+  /// Field Officer Assignments
+  Future<List<ComplaintModel>> getOfficerAssignments() async {
+    try {
+      final res = await _dio.get(ApiEndpoints.officerAssignments);
+      if (res.statusCode == 200 && res.data is List) {
+        _isBackendConnected = true;
+        final list = res.data as List;
+        return list
+            .map((item) => ComplaintModel.fromJson(item as Map<String, dynamic>))
+            .toList();
+      }
+      throw Exception('Failed to load officer tasks: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      _isBackendConnected = false;
+      throw Exception(_parseDioError(dioError, fallback: 'Could not retrieve assigned work'));
+    }
+  }
+
+  /// Field Officer Work Update Progress
+  Future<bool> updateOfficerProgress({
+    required String complaintId,
+    required String status,
+    String? resolutionNotes,
+  }) async {
+    try {
+      final res = await _dio.post(
+        ApiEndpoints.officerUpdates(complaintId),
+        data: {
+          'status': status,
+          'resolution_notes': resolutionNotes,
+        },
+      );
+      if (res.statusCode == 200) {
+        return true;
+      }
+      throw Exception('Failed to update task progress: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Failed to update work progress'));
+    }
+  }
+
+  /// Field Officer Complete Assignment
+  Future<bool> completeOfficerAssignment({
+    required String complaintId,
+    String? resolutionNotes,
+  }) async {
+    try {
+      final res = await _dio.post(
+        ApiEndpoints.officerComplete(complaintId),
+        data: {
+          'status': 'resolved',
+          'resolution_notes': resolutionNotes ?? 'Completed by field officer.',
+        },
+      );
+      if (res.statusCode == 200) {
+        return true;
+      }
+      throw Exception('Failed to complete assignment: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Failed to mark task resolved'));
+    }
+  }
+
+  /// Upload Complaint Photo Attachment (Before/After Evidence)
+  Future<Map<String, dynamic>> uploadComplaintAttachment({
+    required String complaintId,
+    required List<int> fileBytes,
+    required String filename,
+    double? latitude,
+    double? longitude,
+    double? gpsAccuracy,
+    String uploadPhase = 'resolution',
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(fileBytes, filename: filename),
+        if (latitude != null) 'latitude': latitude,
+        if (longitude != null) 'longitude': longitude,
+        if (gpsAccuracy != null) 'gps_accuracy': gpsAccuracy,
+        'upload_phase': uploadPhase,
+      });
+
+      final res = await _dio.post(
+        '${ApiEndpoints.complaints}/$complaintId/attachments',
+        data: formData,
+      );
+
+      if (res.statusCode == 200 && res.data != null) {
+        return res.data as Map<String, dynamic>;
+      }
+      throw Exception('Failed to upload photo: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not upload photo evidence'));
+    }
+  }
+
+  /// Complaint Activity History
+  Future<List<Map<String, dynamic>>> getComplaintHistory(String complaintId) async {
+    try {
+      final res = await _dio.get(ApiEndpoints.complaintHistory(complaintId));
+      if (res.statusCode == 200 && res.data is List) {
+        return List<Map<String, dynamic>>.from(res.data as List);
+      }
+    } catch (_) {}
+    return [];
   }
 
   /// Get Municipalities
@@ -539,16 +619,10 @@ class ApiService {
       if (res.statusCode == 200 && res.data is List) {
         return List<Map<String, dynamic>>.from(res.data as List);
       }
-    } catch (_) {}
-    return [
-      {
-        'id': 'muni-gcc',
-        'name': 'Greater Chennai Corporation (GCC)',
-        'name_ta': 'பெருநகர சென்னை மாநகராட்சி',
-        'code': 'GCC',
-        'district': 'Chennai',
-      }
-    ];
+      throw Exception('Failed to load municipalities: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load municipal data'));
+    }
   }
 
   /// Get Zones for a Municipality
@@ -563,13 +637,10 @@ class ApiService {
       if (res.statusCode == 200 && res.data is List) {
         return List<Map<String, dynamic>>.from(res.data as List);
       }
-    } catch (_) {}
-    return [
-      {'id': 'z-05', 'name': 'Zone 5 (Royapuram)', 'name_ta': 'மண்டலம் 5 (ராயபுரம்)', 'zone_number': 5, 'code': 'Z05'},
-      {'id': 'z-08', 'name': 'Zone 8 (Anna Nagar)', 'name_ta': 'மண்டலம் 8 (அண்ணா நகர்)', 'zone_number': 8, 'code': 'Z08'},
-      {'id': 'z-10', 'name': 'Zone 10 (Kodambakkam / T. Nagar)', 'name_ta': 'மண்டலம் 10 (கோடம்பாக்கம் / தி. நகர்)', 'zone_number': 10, 'code': 'Z10'},
-      {'id': 'z-13', 'name': 'Zone 13 (Adyar / Velachery)', 'name_ta': 'மண்டலம் 13 (அடையாறு / வேளச்சேரி)', 'zone_number': 13, 'code': 'Z13'},
-    ];
+      throw Exception('Failed to load zones: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load zones'));
+    }
   }
 
   /// Get Wards for a Zone with optional search
@@ -585,17 +656,10 @@ class ApiService {
       if (res.statusCode == 200 && res.data is List) {
         return List<Map<String, dynamic>>.from(res.data as List);
       }
-    } catch (_) {}
-    return [
-      {'id': 'w-101', 'ward_number': 'Ward 101', 'ward_name': 'Anna Nagar East', 'ward_name_ta': 'அண்ணா நகர் கிழக்கு'},
-      {'id': 'w-102', 'ward_number': 'Ward 102', 'ward_name': 'Anna Nagar West', 'ward_name_ta': 'அண்ணா நகர் மேற்கு'},
-      {'id': 'w-103', 'ward_number': 'Ward 103', 'ward_name': 'Shenoy Nagar', 'ward_name_ta': 'செனாய் நகர்'},
-      {'id': 'w-104', 'ward_number': 'Ward 104', 'ward_name': 'Aminjikarai', 'ward_name_ta': 'அமைந்தகரை'},
-      {'id': 'w-105', 'ward_number': 'Ward 105', 'ward_name': 'Arumbakkam', 'ward_name_ta': 'அரும்பாக்கம்'},
-      {'id': 'w-114', 'ward_number': 'Ward 114', 'ward_name': 'T. Nagar North', 'ward_name_ta': 'தி. நகர் வடக்கு'},
-      {'id': 'w-128', 'ward_number': 'Ward 128', 'ward_name': 'Vadapalani', 'ward_name_ta': 'வடபழனி'},
-      {'id': 'w-177', 'ward_number': 'Ward 177', 'ward_name': 'Velachery', 'ward_name_ta': 'வேளச்சேரி'},
-    ];
+      throw Exception('Failed to load wards: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not load wards'));
+    }
   }
 
   /// Resolve nearest ward by GPS coordinates
@@ -629,10 +693,13 @@ class ApiService {
         _currentUserProfile = res.data as Map<String, dynamic>;
         return _currentUserProfile!;
       }
-    } catch (_) {}
-    return _currentUserProfile ?? {};
+      throw Exception('Failed to update ward: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Ward update request failed'));
+    }
   }
 
+  /// Get current user profile
   Future<Map<String, dynamic>> getUserProfile() async {
     try {
       final res = await _dio.get(ApiEndpoints.userMe);
@@ -640,7 +707,32 @@ class ApiService {
         _currentUserProfile = res.data as Map<String, dynamic>;
         return _currentUserProfile!;
       }
-    } catch (_) {}
-    return _currentUserProfile ?? {};
+      throw Exception('Failed to get user profile: Status ${res.statusCode}');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Could not fetch user profile'));
+    }
+  }
+
+  /// Submit citizen resolution feedback
+  Future<bool> submitFeedback({
+    required String complaintId,
+    required int rating,
+    String? feedbackText,
+  }) async {
+    try {
+      final res = await _dio.post(
+        '${ApiEndpoints.complaints}/$complaintId/feedback',
+        queryParameters: {
+          'rating': rating,
+          if (feedbackText != null && feedbackText.isNotEmpty) 'feedback_text': feedbackText,
+        },
+      );
+      if (res.statusCode == 200) {
+        return true;
+      }
+      throw Exception('Failed to submit feedback');
+    } on DioException catch (dioError) {
+      throw Exception(_parseDioError(dioError, fallback: 'Failed to submit feedback'));
+    }
   }
 }

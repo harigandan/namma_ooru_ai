@@ -1,6 +1,7 @@
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 from app.models.complaint import Complaint, ComplaintStatusHistory
 from app.models.ai_classification import AIClassification
 from app.models.complaint_assignment import ComplaintAssignment
@@ -10,11 +11,15 @@ class ComplaintRepository:
         self.db = db
 
     async def get_by_id(self, complaint_id: str) -> Optional[Complaint]:
-        result = await self.db.execute(select(Complaint).where(Complaint.id == complaint_id))
+        result = await self.db.execute(
+            select(Complaint).options(selectinload(Complaint.attachments)).where(Complaint.id == complaint_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_by_number(self, complaint_number: str) -> Optional[Complaint]:
-        result = await self.db.execute(select(Complaint).where(Complaint.complaint_number == complaint_number))
+        result = await self.db.execute(
+            select(Complaint).options(selectinload(Complaint.attachments)).where(Complaint.complaint_number == complaint_number)
+        )
         return result.scalar_one_or_none()
 
     async def list_complaints(
@@ -28,7 +33,7 @@ class ComplaintRepository:
         skip: int = 0,
         limit: int = 100,
     ) -> List[Complaint]:
-        query = select(Complaint)
+        query = select(Complaint).options(selectinload(Complaint.attachments))
         if citizen_id:
             query = query.where(Complaint.citizen_id == citizen_id)
         if department_id:

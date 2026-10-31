@@ -186,62 +186,73 @@ class _ComplaintFormScreenState extends State<ComplaintFormScreen> {
 
     setState(() => _isSubmitting = true);
 
-    final created = await ApiService().createComplaint(
-      title: _titleController.text.trim(),
-      description: _descriptionController.text.trim(),
-      category: _selectedCategory,
-      priority: _detectedPriority,
-      latitude: _latitude,
-      longitude: _longitude,
-      gpsAccuracy: _gpsAccuracy,
-      address: _addressController.text.trim(),
-      wardNumber: _resolvedWardNumber ?? 'Ward 102',
-      zone: 'Zone 8 (Anna Nagar)',
-      isAnonymous: _isAnonymous,
-      photoBase64: _photoBase64,
-      photoFilename: _photoFilename,
-    );
+    try {
+      final created = await ApiService().createComplaint(
+        title: _titleController.text.trim(),
+        description: _descriptionController.text.trim(),
+        category: _selectedCategory,
+        priority: _detectedPriority,
+        latitude: _latitude,
+        longitude: _longitude,
+        gpsAccuracy: _gpsAccuracy,
+        address: _addressController.text.trim(),
+        wardNumber: _resolvedWardNumber ?? 'Ward 102',
+        zone: 'Zone 8 (Anna Nagar)',
+        isAnonymous: _isAnonymous,
+        photoBase64: _photoBase64,
+        photoFilename: _photoFilename,
+      );
 
-    setState(() => _isSubmitting = false);
+      setState(() => _isSubmitting = false);
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: AppSpacing.roundedMd),
-          title: Text(l10n.tr('complaint_registered_title')),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(l10n.tr('ticket_number_is')),
-              const SizedBox(height: 6),
-              Text(
-                created.complaintNumber,
-                style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary),
-              ),
-              const SizedBox(height: 10),
-              Text(l10n.tr('ticket_assigned_inspection')),
-            ],
-          ),
-          actions: [
-            ElevatedButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                Navigator.of(context).pop();
-                if (widget.onSubmitted != null) widget.onSubmitted!();
-              },
-              child: Text(l10n.tr('done')),
+      showDialog(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: AppSpacing.roundedMd),
+            title: Text(l10n.tr('complaint_registered_title')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(l10n.tr('ticket_number_is')),
+                const SizedBox(height: 6),
+                Text(
+                  created.complaintNumber,
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primary),
+                ),
+                const SizedBox(height: 10),
+                Text(l10n.tr('ticket_assigned_inspection')),
+              ],
             ),
-          ],
-        );
-      },
-    );
+            actions: [
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context).pop();
+                  if (widget.onSubmitted != null) widget.onSubmitted!();
+                },
+                child: Text(l10n.tr('done')),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isSubmitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: AppColors.error,
+        ),
+      );
+    }
   }
 
   @override
