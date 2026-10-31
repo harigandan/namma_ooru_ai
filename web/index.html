@@ -7,18 +7,13 @@
 
     The path provided below has to start and end with a slash "/" in order for
     it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
   -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Namma Ooru AI - Tamil Nadu Civic Governance & Grievance Redressal Portal">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -29,18 +24,48 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>namma_ooru_ai</title>
+  <title>Namma Ooru AI • நம்ம ஊர் AI</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
+  <!-- Resilient Flutter Web Bootstrapper -->
+  <script src="flutter_bootstrap.js" async onerror="loadFlutterFallback()"></script>
+  <script>
+    var flutterLoaded = false;
+    window.addEventListener('flutter-first-frame', function () {
+      flutterLoaded = true;
+    });
 
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
-  <script src="flutter_bootstrap.js" async></script>
+    function loadFlutterFallback() {
+      if (flutterLoaded) return;
+      flutterLoaded = true;
+      console.warn("flutter_bootstrap.js failed or unavailable. Bootstrapping via flutter.js fallback...");
+      var script = document.createElement('script');
+      script.src = 'flutter.js';
+      script.onload = function () {
+        if (window._flutter && window._flutter.loader) {
+          if (typeof _flutter.loader.load === 'function') {
+            _flutter.loader.load();
+          } else if (typeof _flutter.loader.loadEntrypoint === 'function') {
+            _flutter.loader.loadEntrypoint({
+              onEntrypointLoaded: function (engineInitializer) {
+                engineInitializer.initializeEngine().then(function (appRunner) {
+                  appRunner.runApp();
+                });
+              }
+            });
+          }
+        }
+      };
+      document.body.appendChild(script);
+    }
+
+    // Fallback if bootstrap doesn't trigger within 2500ms
+    setTimeout(function () {
+      if (!flutterLoaded && !window._flutterEngine) {
+        loadFlutterFallback();
+      }
+    }, 2500);
+  </script>
 </body>
 </html>

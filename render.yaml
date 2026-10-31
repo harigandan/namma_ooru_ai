@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: namma-ooru-ai-frontend
+    runtime: static
+    branch: master
+    buildCommand: bash build_render_web.sh
+    staticPublishPath: build/web
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
